@@ -1,0 +1,1812 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, user-scalable=no"/>
+    <title>AABuilder</title>
+	<link rel="stylesheet" type="text/css" href="style.css"/>
+  </head>
+  <body id="body" onload="main()">
+    <div id="container" ondragstart="return false;">
+      <textarea id="aacode" rows="2" ondrop="return false;" readonly style="left:0px; top:10px; font-size:15px;
+       width:720px; resize:none; background-color:lightgray; position:absolute"></textarea>
+      <div id="copyright" style="right:3px; bottom:2px; font-family: cursive;
+       font-size: 8px; position: absolute">AABuilder © A.Sinyavskiy UZH</div>
+      <div id="buttons" ondragstart="return false;">
+        <img id="sw_replace" src="toolbar/replace_off.svg" class="sw but_dis" draggable="false"/>
+        <img id="sw_remove" src="toolbar/remove_off.svg" class="sw but_dis" draggable="false"/>
+        <img id="but_A" src="toolbar/A.svg" class="but" draggable="false" mydraggable="true"/>
+        <img id="but_C" src="toolbar/C.svg" class="but but_dis" style="display:none" draggable="false"/>
+        <img id="but_N" src="toolbar/N.svg" class="but but_dis" draggable="false"/>
+        <img id="but_O" src="toolbar/O.svg" class="but but_dis" draggable="false"/>
+        <img id="but_S" src="toolbar/S.svg" class="but but_dis" draggable="false"/>
+        <img id="but_plus" src="toolbar/plus.svg" class="but but_dis" draggable="false"/>
+        <img id="but_minus" src="toolbar/minus.svg" class="but but_dis" draggable="false"/>
+        <img id="but_undo" src="toolbar/undo.svg" class="but but_undo but_dis" draggable="false"/>
+        <img id="but_H" src="toolbar/H.svg" class="but but_H" draggable="false"/>
+        <img id="but_2" src="toolbar/2.svg" class="but_23" draggable="false"/>
+        <img id="but_3" src="toolbar/3.svg" class="but_23" draggable="false"/>
+      </div>
+      <svg id="svg">
+      </svg>
+      <div id="can" ondragstart="return false;">
+      </div>
+    </div>
+    
+    <script type="text/javascript">
+      "use strict";
+      function main() {
+        let dragSource = null, lastTouch = null, lastTarget = null, ptDown = null, img = null, imgOffset = { x: 0, y: 0 };
+        let preventClick = false;
+        let counter = 0, tree = [], rings = [], code = "", history = [];
+        let cur_ori, cur_seq, cur_fori, cur_fseq;
+        let lock = false;
+        let replace = false, remove = false;
+        let enableinput = getUrlParam("enableinput", "no");
+        let startSMILES = getUrlParam("startSMILES", "");
+        let wts = {"O":2**44, "C":2**40, "S":2**38, "N":2**36, "H":2**24, "chrg":2**26, "s":0, "d":2**42};
+        let icon, icon23, iconpm, marg, iscale = 1, bondlength = 70, bondstroke = 4;
+        let svgns = "http://www.w3.org/2000/svg";
+        let cont = document.getElementById("container");
+        let aacode = document.getElementById("aacode");
+        let can = document.getElementById("can");
+        let svg = document.getElementById("svg");
+        // let copy = document.getElementById("but_copy");
+        let buta = document.getElementById("but_A");
+        let butc = document.getElementById("but_C");
+        let butn = document.getElementById("but_N");
+        let buto = document.getElementById("but_O");
+        let buts = document.getElementById("but_S");
+        let plus = document.getElementById("but_plus");
+        let minus = document.getElementById("but_minus");
+        let undo = document.getElementById("but_undo");
+        let swrep = document.getElementById("sw_replace");
+        let swrem = document.getElementById("sw_remove");
+        
+        document.addEventListener("touchstart", ftouchstart, {passive: false});
+        document.addEventListener("touchmove", ftouchmove, {passive: false});
+        document.addEventListener("touchend", ftouchend);
+        document.addEventListener("touchcancel", ftouchend);
+        document.addEventListener("mousedown", ftouchstart, {passive: false});
+        document.addEventListener("mousemove", ftouchmove, {passive: false});
+        document.addEventListener("mouseup", ftouchend);
+
+        rescaleAll();
+        history.push(new Snapshot());
+        window.addEventListener("resize", debounce(rescaleAll));
+        aacode.addEventListener("input", debounce(aacode_input));
+        // copy.addEventListener("click", copy_click);
+        undo.addEventListener("click", undo_click);
+        swrep.addEventListener("click", replace_switch);
+        swrem.addEventListener("click", remove_switch);
+        if (enableinput === "yes") { aacode.removeAttribute("readonly"); }
+        aacode.value = startSMILES;
+        if (aacode.value !== "") { aacode.dispatchEvent(new Event("input")); }
+
+        function getUrlParam(parameter, defaultvalue){
+          var urlparameter = defaultvalue;
+          if(window.location.href.indexOf(parameter) > -1) {
+              urlparameter = getUrlVars()[parameter];
+          }
+          return urlparameter;
+        }
+        function getUrlVars() {
+          var vars = {};
+          window.location.href.replace(/[?&]+([^=&]+)=([^&]*)/gi, function(m,key,value) {
+              vars[key] = decodeURI(value);
+          });
+          return vars;
+        }
+
+        function getang(x1, y1, x2, y2) {
+          return -Math.atan2(y2-y1, x2-x1);
+        }
+        function getdx(x1, y1, x2, y2, dist, da = 0) {
+          let a = getang(x1, y1, x2, y2) + da;
+          return Math.cos(a)*dist;
+        }
+        function getdy(x1, y1, x2, y2, dist, da = 0) {
+          let a = getang(x1, y1, x2, y2) + da;
+          return -Math.sin(a)*dist;
+        }
+        function round(inp, prec = 1000) {
+          return Math.round(inp*1000)/1000;
+        }
+        function getdbp(x1, y1, x2, y2) {
+          let dx = -getdy(x1, y1, x2, y2, bondstroke);
+          let dy = getdx(x1, y1, x2, y2, bondstroke);
+          return "M " + round(x1+dx).toString() + " " + round(y1+dy).toString() +
+                " L " + round(x2+dx).toString() + " " + round(y2+dy).toString() +
+                " M " + round(x1-dx).toString() + " " + round(y1-dy).toString() +
+                " L " + round(x2-dx).toString() + " " + round(y2-dy).toString();
+        }
+        function togglebond(e) {
+          if (!remove) {
+            let atb = tree[Number(e.target.id.split('_')[1])].bonds;
+            let atc = tree[Number(e.target.id.split('_')[1])].children;
+            let child = Number(e.target.id.split('_')[2]);
+            if (atb[atc.indexOf(child)] === "s") { atb[atc.indexOf(child)] = "d"; }
+            else if (atb[atc.indexOf(child)] === "d") { atb[atc.indexOf(child)] = "s"; }
+            recalcclasses();
+            code = getcode(0, "s");
+            aacode.value = code;
+            rescaleAll();
+            history.push(new Snapshot());
+            undo.classList.remove("but_dis");
+          }
+        }
+        function removecharge(e) {
+          let at = Number(e.target.id.split('_')[1]);
+          tree[at].chrg = 0;
+          can.removeChild(e.target);
+          recalcclasses();
+          code = getcode(0, "s");
+          aacode.value = code;
+          rescaleAll();
+          history.push(new Snapshot());
+          undo.classList.remove("but_dis");
+        }
+        function drawcharges() {
+          let item;
+          for (let i = 0; i < counter; i += 1) {
+            if (tree[i].chrg > 0) {
+              item = document.getElementById("charge_" + i);
+              item.style["width"] = iconpm + "px";
+              item.style["height"] = iconpm + "px";
+              item.style["margin"] = 0 + "px";
+              item.style["left"] = tree[i].x + icon - marg + "px";
+              item.style["top"] = tree[i].y - icon + marg/2 + iconpm + "px";
+              item.style["display"] = "inline";
+            }
+          }
+        }
+        function toggleHremoveside(e) {
+          if (preventClick) { preventClick = false; return; }
+          let at = Number(e.target.id.split('_')[1]);
+          if (remove) {
+            let item;
+            let side = tree[at].side;
+            if (side >= 0) {
+              let toremove = [];
+              let newind = [];
+              let ringrm = -1;
+              // delete atoms and fill index arrays
+              for (let i = 0; i < counter; i += 1) {
+                if (tree[i].main < 0 && tree[i].side === side) {
+                  if (ringrm < 0) { ringrm = isinring(i); }
+                  toremove.push(i);
+                  delete tree[i];
+                  newind.push(-1);
+                  item = document.getElementById("elem_" + i);
+                  can.removeChild(item);
+                  item = document.getElementById("charge_" + i);
+                  if (item) { can.removeChild(item); }
+                  item = document.getElementById("H_" + i);
+                  if (item) { can.removeChild(item); }
+                  item = document.getElementById("Hn_" + i);
+                  if (item) { can.removeChild(item); }
+                } else {
+                  newind.push(i-toremove.length);
+                  item = document.getElementById("elem_" + i);
+                  item.id = "elem_" + (i-toremove.length);
+                  item = document.getElementById("charge_" + i);
+                  if (item) { item.id = "charge_" + (i-toremove.length); }
+                  item = document.getElementById("H_" + i);
+                  if (item) { item.id = "H_" + (i-toremove.length); }
+                  item = document.getElementById("Hn_" + i);
+                  if (item) { item.id = "Hn_" + (i-toremove.length); }
+                }
+              }
+              // delete ring
+              let iN;
+              if (ringrm >= 0) {
+                iN = newind[rings[ringrm].ori];
+                rings.splice(ringrm,1);
+              }
+              // shift remaining rings
+              for (let i = 0; i < rings.length; i += 1) {
+                let seq = rings[i].seq;
+                let fseq = rings[i].fseq;
+                rings[i].ori = newind[rings[i].ori];
+                for (let j = 0; j < seq.length; j += 1) {
+                  seq[j] = newind[seq[j]];
+                }
+                if (rings[i].fori >= 0) { 
+                  rings[i].fori = newind[rings[i].fori];
+                  for (let j = 0; j < fseq.length; j += 1) {
+                    fseq[j] = newind[fseq[j]];
+                  }
+                }
+              }
+              // shift bonds of remaining atoms
+              tree = tree.filter(function(element){ return element !== undefined; });
+              counter = tree.length;
+              for (let i = 0; i < counter; i += 1) {
+                tree[i].parent = newind[tree[i].parent];
+                for (let k = 0; k < tree[i].children.length; k += 1) {
+                  if (toremove.includes(tree[i].children[k])) {
+                    delete tree[i].children[k];
+                    delete tree[i].bonds[k];
+                  } else {
+                    tree[i].children[k] = newind[tree[i].children[k]];
+                  }
+                }
+                tree[i].children = tree[i].children.filter(function(element){ return element !== undefined; });
+                tree[i].bonds = tree[i].bonds.filter(function(element){ return element !== undefined; });
+              }
+              tree[0].parent = -1;
+              tree[0].maxch = 3;
+              for (let i = 1; i < counter; i += 1) {
+                if (tree[i].main === side && tree[i].side === side) {
+                  tree[i].maxch = 2;
+                  if (tree[i].parent < 0) {
+                    tree[i].parent = iN;
+                    let k = tree[i].children.indexOf(iN);
+                    if (k >= 0) {
+                      tree[i].children.splice(k,1);
+                      tree[iN].children.push(i);
+                      tree[iN].bonds.push(tree[i].bonds.splice(k,1)[0]);
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            tree[at].nH = (tree[at].nH+1)%4;
+          }
+          recalcclasses();
+          code = getcode(0, "s");
+          aacode.value = code;
+          rescaleAll();
+          history.push(new Snapshot());
+          undo.classList.remove("but_dis");
+        }
+        function drawHs() {
+          let item;
+          let nodeCopy;
+          for (let i = 0; i < counter; i += 1) {
+            item = document.getElementById("H_" + i);
+            if (item) { can.removeChild(item); }
+            item = document.getElementById("Hn_" + i);
+            if (item) { can.removeChild(item); }
+          }
+          for (let i = 0; i < counter; i += 1) {
+            if (tree[i].nH > 0) {
+              nodeCopy = document.getElementById("but_H").cloneNode(true);
+              nodeCopy.id = "H_" + i;
+              nodeCopy.classList.add("elem_H23");
+              can.appendChild(nodeCopy);
+            }
+            if (tree[i].nH > 1) {
+              nodeCopy = document.getElementById("but_" + tree[i].nH).cloneNode(true);
+              nodeCopy.id = "Hn_" + i;
+              nodeCopy.classList.add("elem_H23");
+              can.appendChild(nodeCopy);
+            }
+          }
+          for (let i = 0; i < counter; i += 1) {
+            item = document.getElementById("H_" + i);
+            if (item) {
+              let x, y, xn, yn;
+              x = tree[i].x + icon;
+              y = tree[i].y + marg;
+              xn = tree[i].x + icon + icon23;
+              yn = tree[i].y + icon23;
+              let right = collision(x, y, icon, icon, xn, yn);
+              if (right[0] > 0) {
+                x = tree[i].x - icon + 3/2*marg;
+                y = tree[i].y + marg;
+                xn = tree[i].x;
+                yn = tree[i].y + icon23;
+                let left = collision(x, y, icon, icon, xn, yn);
+                if (left[0] > 0) {
+                  x = tree[i].x + marg;
+                  y = tree[i].y + icon;
+                  xn = tree[i].x + icon - marg/2;
+                  yn = tree[i].y + icon + icon23 - marg;
+                  let bottom = collision(x, y, icon, icon, xn, yn);
+                  if (bottom[0] > 0) {
+                    x = tree[i].x + marg;
+                    y = tree[i].y - icon + 2*marg;
+                    xn = tree[i].x + icon - marg/2;
+                    yn = tree[i].y - icon + icon23 + marg;
+                    let top = collision(x, y, icon, icon, xn, yn);
+                    if (top[0] > 0) {
+                      if (right[0] <= left[0] && right[0] <= bottom[0] && right[0] <= top[0]) {
+                        x = right[1];
+                        y = right[2];
+                        xn = right[3];
+                        yn = right[4];
+                      } else if (left[0] <= right[0] && left[0] <= bottom[0] && left[0] <= top[0]) {
+                        x = left[1];
+                        y = left[2];
+                        xn = left[3];
+                        yn = left[4];
+                      } else if (bottom[0] <= right[0] && bottom[0] <= left[0] && bottom[0] <= top[0]) {
+                        x = bottom[1];
+                        y = bottom[2];
+                        xn = bottom[3];
+                        yn = bottom[4];
+                      } else if (top[0] <= right[0] && top[0] <= left[0] && top[0] <= bottom[0]) {
+                        x = top[1];
+                        y = top[2];
+                        xn = top[3];
+                        yn = top[4];
+                      }
+                    }
+                  }
+                }
+              }
+              item.style["left"] = x + "px";
+              item.style["top"] = y + "px";
+              item.style["display"] = "inline";
+              item = document.getElementById("Hn_" + i);
+              if (item) {
+                item.style["left"] = xn + "px";
+                item.style["top"] = yn + "px";
+                item.style["display"] = "inline";
+              }
+            }
+          }
+        }
+        function collision(x, y, w, h, xn, yn) {
+          let overlap = 0;
+          document.querySelectorAll("line, path").forEach(item => {
+            let box = item.getBBox();
+            let ow, oh;
+            if (x <= box.x) { ow = Math.max(0, x+w - box.x); }
+            else { ow = Math.max(0, box.x+box.width - x); }
+            if (y <= box.y) { oh = Math.max(0, y+h - box.y); }
+            else { oh = Math.max(0, box.y+box.height - y); }
+            overlap += ow*oh;
+          })
+          return [overlap, x, y, xn, yn];
+        }
+        function updatexy() {
+          let minx = 0, miny = 0;
+          let par, gpar, gp1, gp2, nc, ic, da, inr, seq, ori, pinr, pinfr;
+          tree[0].x = 0;
+          tree[0].y = 0;
+          // first proline ring
+          inr = isinring(0);
+          if (inr >= 0 && 0 === rings[inr].ori) {
+            seq = rings[inr].seq;
+            tree[seq[0]].x = getdx(1, 0, 0, 0, bondlength*5/6, 0);
+            tree[seq[0]].y = getdy(1, 0, 0, 0, bondlength*5/6, 0);
+            da = Math.PI - (seq.length-1)/(seq.length+1)*Math.PI;
+            for (let j = 1; j < seq.length; j += 1) {
+              if (j === 1) { par = tree[0]; }
+              else { par = tree[seq[j-2]]; }
+              tree[seq[j]].x = tree[seq[j-1]].x + getdx(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+              tree[seq[j]].y = tree[seq[j-1]].y + getdy(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+            }
+            if (rings[inr].fori >= 0) {
+              seq = rings[inr].fseq;
+              da = Math.PI - (seq.length-1)/(seq.length+1)*Math.PI;
+              par = tree[seq[seq.length-1]];
+              tree[seq[0]].x = tree[rings[inr].fori].x + getdx(par.x, par.y, tree[rings[inr].fori].x, tree[rings[inr].fori].y, bondlength*5/6, da);
+              tree[seq[0]].y = tree[rings[inr].fori].y + getdy(par.x, par.y, tree[rings[inr].fori].x, tree[rings[inr].fori].y, bondlength*5/6, da);
+              for (let j = 1; j < seq.length-1; j += 1) {
+                if (j === 1) { par = tree[rings[inr].fori]; }
+                else { par = tree[seq[j-2]]; }
+                tree[seq[j]].x = tree[seq[j-1]].x + getdx(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                tree[seq[j]].y = tree[seq[j-1]].y + getdy(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+              }
+            }
+          }
+          for (let i = 1; i < counter; i += 1) {
+            inr = isinring(i);
+            if (inr >= 0 && i !== rings[inr].ori) { continue; }
+            if (isinfring(i) >= 0) { continue; }
+            par = tree[tree[i].parent];
+            gpar = tree[par.parent];
+            nc = par.children.length;
+            ic = par.children.indexOf(i);
+            if (par.parent < 0) {
+              if (isinring(0) < 0) {
+                if (nc < 3) {
+                  if (ic === 0) {
+                    tree[i].x = par.x - bondlength;
+                    tree[i].y = par.y;
+                  } else if (ic === 1) {
+                    tree[i].x = par.x + bondlength;
+                    tree[i].y = par.y;
+                  }
+                } else if (nc === 3) {
+                  if (ic === 0) {
+                    tree[i].x = par.x - bondlength;
+                    tree[i].y = par.y;
+                  } else if (ic === 1) {
+                    tree[i].x = par.x;
+                    tree[i].y = par.y + bondlength;
+                  } else if (ic === 2) {
+                    tree[i].x = par.x + bondlength;
+                    tree[i].y = par.y;
+                  }
+                }
+              } else {
+                tree[i].x = par.x + bondlength;
+                tree[i].y = par.y;
+              }
+            } else {
+              pinr = isinring(tree[i].parent);
+              pinfr = isinfring(tree[i].parent);
+              if (pinr >= 0 || pinfr >= 0) {
+                if (par.sym === "C" && par.main >= 0 && par.side >= 0) {
+                  tree[i].x = par.x + getdx(tree[rings[pinr].ori].x, tree[rings[pinr].ori].y, par.x, par.y, bondlength);
+                  tree[i].y = par.y + getdy(tree[rings[pinr].ori].x, tree[rings[pinr].ori].y, par.x, par.y, bondlength);
+                } else {
+                  if (pinr >= 0) {
+                    seq = rings[pinr].seq.slice();
+                    ori = rings[pinr].ori;
+                  } else if (pinfr >= 0) {
+                    seq = rings[pinfr].fseq.slice();
+                    ori = rings[pinfr].fori;
+                  }
+                  seq.unshift(ori);
+                  seq.push(ori);
+                  if (ori === tree[i].parent) {
+                    gp1 = tree[seq[1]];
+                    gp2 = tree[seq[seq.length-2]];
+                  } else {
+                    gp1 = tree[seq[seq.indexOf(tree[i].parent)-1]];
+                    gp2 = tree[seq[seq.indexOf(tree[i].parent)+1]];
+                  }
+                  tree[i].x = par.x + getdx((gp1.x + gp2.x)/2, (gp1.y + gp2.y)/2, par.x, par.y, bondlength, 0);
+                  tree[i].y = par.y + getdy((gp1.x + gp2.x)/2, (gp1.y + gp2.y)/2, par.x, par.y, bondlength, 0);
+                }
+              } else {
+                if (par.sym === "C" && par.main >= 0 && par.side < 0) {
+                  da = ic*Math.PI/2;
+                  tree[i].x = par.x + getdx(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                  tree[i].y = par.y + getdy(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                } else if (par.sym === "N" && par.main >= 0 && par.side >= 0) {
+                  if (nc === 1) {
+                    tree[i].x = par.x + getdx(gpar.x, gpar.y, par.x, par.y, bondlength);
+                    tree[i].y = par.y + getdy(gpar.x, gpar.y, par.x, par.y, bondlength);
+                  } else if (nc === 2) {
+                    da = (ic-1)*Math.PI/2;
+                    tree[i].x = par.x + getdx(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                    tree[i].y = par.y + getdy(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                  }
+                } else if (par.sym === "C" && par.main >= 0 && par.side >= 0) {
+                  if (nc === 1) {
+                    tree[i].x = par.x + getdx(gpar.x, gpar.y, par.x, par.y, bondlength);
+                    tree[i].y = par.y + getdy(gpar.x, gpar.y, par.x, par.y, bondlength);
+                  } else if (nc === 2) {
+                    da = (ic-1)*Math.PI/2;
+                    tree[i].x = par.x + getdx(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                    tree[i].y = par.y + getdy(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                  }
+                } else {
+                  if (nc === 1) {
+                    tree[i].x = par.x + getdx(gpar.x, gpar.y, par.x, par.y, bondlength);
+                    tree[i].y = par.y + getdy(gpar.x, gpar.y, par.x, par.y, bondlength);
+                  } else if (nc === 2) {
+                    da = (2*ic - 1)*Math.PI/4;
+                    tree[i].x = par.x + getdx(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                    tree[i].y = par.y + getdy(gpar.x, gpar.y, par.x, par.y, bondlength, da);
+                  }
+                }
+              }
+            }
+            if (tree[i].main >= 0 && tree[i].cls >= -(2**49)) { tree[i].x += bondlength*1/4; }
+            if (inr >= 0 && i === rings[inr].ori) {
+              if (tree[i].sym === "N" && tree[i].main >= 0) {
+                seq = rings[inr].seq;
+                da = Math.PI - (seq.length-1)/(seq.length+1)*Math.PI;
+                tree[seq[0]].x = tree[i].x + getdx(1, 0, 0, 0, bondlength*5/6, da);
+                tree[seq[0]].y = tree[i].y + getdy(1, 0, 0, 0, bondlength*5/6, da);
+                da = Math.PI - (seq.length-1)/(seq.length+1)*Math.PI;
+                for (let j = 1; j < seq.length; j += 1) {
+                  if (j === 1) { par = tree[i]; }
+                  else { par = tree[seq[j-2]]; }
+                  tree[seq[j]].x = tree[seq[j-1]].x + getdx(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                  tree[seq[j]].y = tree[seq[j-1]].y + getdy(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                }
+                if (rings[inr].fori >= 0) {
+                  seq = rings[inr].fseq;
+                  da = Math.PI - (seq.length-1)/(seq.length+1)*Math.PI;
+                  par = tree[seq[seq.length-1]];
+                  tree[seq[0]].x = tree[rings[inr].fori].x + getdx(par.x, par.y, tree[rings[inr].fori].x, tree[rings[inr].fori].y, bondlength*5/6, da);
+                  tree[seq[0]].y = tree[rings[inr].fori].y + getdy(par.x, par.y, tree[rings[inr].fori].x, tree[rings[inr].fori].y, bondlength*5/6, da);
+                  for (let j = 1; j < seq.length-1; j += 1) {
+                    if (j === 1) { par = tree[rings[inr].fori]; }
+                    else { par = tree[seq[j-2]]; }
+                    tree[seq[j]].x = tree[seq[j-1]].x + getdx(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                    tree[seq[j]].y = tree[seq[j-1]].y + getdy(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                  }
+                }
+              } else {
+                seq = rings[inr].seq;
+                da = -(seq.length-1)/(seq.length+1)*Math.PI/2;
+                tree[seq[0]].x = tree[i].x + getdx(par.x, par.y, tree[i].x, tree[i].y, bondlength*5/6, da);
+                tree[seq[0]].y = tree[i].y + getdy(par.x, par.y, tree[i].x, tree[i].y, bondlength*5/6, da);
+                da = Math.PI - (seq.length-1)/(seq.length+1)*Math.PI;
+                for (let j = 1; j < seq.length; j += 1) {
+                  if (j === 1) { par = tree[i]; }
+                  else { par = tree[seq[j-2]]; }
+                  tree[seq[j]].x = tree[seq[j-1]].x + getdx(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                  tree[seq[j]].y = tree[seq[j-1]].y + getdy(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                }
+                if (rings[inr].fori >= 0) {
+                  seq = rings[inr].fseq;
+                  da = Math.PI - (seq.length-1)/(seq.length+1)*Math.PI;
+                  par = tree[seq[seq.length-1]];
+                  tree[seq[0]].x = tree[rings[inr].fori].x + getdx(par.x, par.y, tree[rings[inr].fori].x, tree[rings[inr].fori].y, bondlength*5/6, da);
+                  tree[seq[0]].y = tree[rings[inr].fori].y + getdy(par.x, par.y, tree[rings[inr].fori].x, tree[rings[inr].fori].y, bondlength*5/6, da);
+                  for (let j = 1; j < seq.length-1; j += 1) {
+                    if (j === 1) { par = tree[rings[inr].fori]; }
+                    else { par = tree[seq[j-2]]; }
+                    tree[seq[j]].x = tree[seq[j-1]].x + getdx(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                    tree[seq[j]].y = tree[seq[j-1]].y + getdy(par.x, par.y, tree[seq[j-1]].x, tree[seq[j-1]].y, bondlength*5/6, da);
+                  }
+                }
+              }
+            }
+          }
+          for (let i = 1; i < counter; i += 1) {
+            minx = Math.min(minx, tree[i].x);
+            miny = Math.min(miny, tree[i].y);
+          }
+          minx -= icon + marg;
+          if (minx < 0) {
+            for (let i = 0; i < counter; i += 1) {
+              tree[i].x -= minx;
+            }
+          }
+          miny -= icon + marg;
+          if (miny < 0) {
+            for (let i = 0; i < counter; i += 1) {
+              tree[i].y -= miny;
+            }
+          }
+        }
+        function drawbonds() {
+          let shift = marg + icon/2;
+          let shape, x1, y1, x2, y2, dx, dy;
+          while (svg.lastElementChild) {
+            svg.removeChild(svg.lastElementChild);
+          }
+          for (let i = 0; i < counter; i += 1) {
+            for (let j = 0; j < tree[i].children.length; j += 1) {
+              if (tree[i].bonds[j] === "s") {
+                shape = document.createElementNS(svgns, "line");
+                x1 = tree[i].x + shift;
+                y1 = tree[i].y + shift;
+                x2 = tree[tree[i].children[j]].x + shift;
+                y2 = tree[tree[i].children[j]].y + shift;
+                dx = getdx(x1, y1, x2, y2, icon/2);
+                dy = getdy(x1, y1, x2, y2, icon/2);
+                shape.setAttribute("id", "bond_" + i + "_" + tree[i].children[j]);
+                shape.setAttribute("class", "bond");
+                shape.addEventListener("click", togglebond);
+                shape.setAttribute("x1", x1 + dx);
+                shape.setAttribute("y1", y1 + dy);
+                shape.setAttribute("x2", x2 - dx);
+                shape.setAttribute("y2", y2 - dy);
+                shape.style["stroke-width"] = bondstroke + "px";
+                svg.appendChild(shape);
+              } else if (tree[i].bonds[j] === "d") {
+                shape = document.createElementNS(svgns, "path");
+                x1 = tree[i].x + shift;
+                y1 = tree[i].y + shift;
+                x2 = tree[tree[i].children[j]].x + shift;
+                y2 = tree[tree[i].children[j]].y + shift;
+                dx = getdx(x1, y1, x2, y2, icon/2);
+                dy = getdy(x1, y1, x2, y2, icon/2);
+                shape.setAttribute("id", "bond_" + i + "_" + tree[i].children[j]);
+                shape.setAttribute("class", "bond");
+                shape.addEventListener("click", togglebond);
+                shape.setAttribute("d", getdbp(x1 + dx, y1 + dy, x2 - dx, y2 - dy));
+                shape.style["stroke-width"] = bondstroke + "px";
+                shape.style["-webkit-touch-callout"] = "none";
+                shape.style["-webkit-user-select"] = "none";
+                shape.style["user-select"] = "none";
+                svg.appendChild(shape);
+              }
+            }
+          }
+        }
+        function redrawAll() {
+          if (tree.length === 0) { return; }
+          let item;
+          let fits = 0;
+          let maxx = 0, maxy = 0;
+          updatexy();
+          for (let i = 0; i < counter; i += 1) {
+            maxx = Math.max(maxx, tree[i].x);
+            maxy = Math.max(maxy, tree[i].y);
+          }
+          maxx += 2*icon + 3*marg;
+          maxy += 2*icon + 3*marg;
+          fits = Math.max(maxx/parseInt(can.style["width"], 10), maxy/parseInt(can.style["height"], 10));
+          if (fits < 0.85 && iscale < 1) { iscale = 1; rescaleAll(); }
+          if (fits > 1) { iscale = iscale/(fits + 0.01); rescaleAll(); }
+          for (let i = 0; i < counter; i += 1) {
+            item = document.getElementById("elem_" + i);
+            item.style["left"] = tree[i].x + "px";
+            item.style["top"] = tree[i].y + "px";
+            item.style["display"] = "inline";
+          }
+          drawbonds();
+          drawHs();
+          drawcharges();
+        }
+        
+        function rescaleAll() {
+          let wscale = Math.max(window.innerWidth/800, 0.5);
+          let hscale = Math.max(window.innerHeight/550, 0.5);
+          let pad = 10*hscale;
+          let iconb = 40*hscale;
+          let margb = 10*hscale; 
+          let sw = 15.5625*hscale;
+          let txtfont = 15*hscale;
+          // let txtwidth = Math.max(window.innerWidth, 400) - (2*pad + iconb + 2*margb);
+          let txtwidth = Math.max(window.innerWidth, 400) - (2*pad + margb);
+          icon = 40*hscale*iscale;
+          icon23 = 25*hscale*iscale;
+          iconpm = 30*hscale*iscale;
+          marg = 10*hscale*iscale;
+          bondlength = 70*hscale*iscale;
+          bondstroke = 4*hscale*iscale;
+          document.querySelectorAll(".sw").forEach(item => {
+            item.style["width"] = iconb + "px";
+            item.style["height"] = sw + "px";
+            item.style["margin-left"] = margb + "px";
+            item.style["margin-right"] = margb + "px";
+            item.style["-webkit-touch-callout"] = "none";
+            item.style["-webkit-user-select"] = "none";
+            item.style["user-select"] = "none";
+          })
+          document.querySelectorAll(".but").forEach(item => {
+            if (item.classList.contains("elem") || item.classList.contains("but_H")) { item.style["width"] = icon + "px"; }
+            else { item.style["width"] = iconb + "px"; }
+            if (item.classList.contains("elem") || item.classList.contains("but_H")) { item.style["height"] = icon + "px"; }
+            else { item.style["height"] = iconb + "px"; }
+            if (item.classList.contains("elem") || item.classList.contains("but_H")) { item.style["margin"] = marg + "px"; }
+            else { item.style["margin"] = margb + "px"; }
+            item.style["-webkit-touch-callout"] = "none";
+            item.style["-webkit-user-select"] = "none";
+            item.style["user-select"] = "none";
+          })
+          document.querySelectorAll(".but_H").forEach(item => {
+            item.style["margin"] = 0 + "px";
+          })
+          document.querySelectorAll(".but_23").forEach(item => {
+            item.style["width"] = icon23 + "px";
+            item.style["height"] = icon23 + "px";
+            item.style["margin"] = 0 + "px";
+          })
+          document.querySelectorAll(".elem_pm").forEach(item => {
+            item.style["width"] = iconpm + "px";
+            item.style["height"] = iconpm + "px";
+            item.style["margin"] = 0 + "px";
+          })
+          document.getElementById("buttons").style["width"] = iconb + 2*margb + "px";
+          document.getElementById("buttons").style["top"] = iconb + 3*margb + "px";
+          // aacode.style["left"] = iconb + 2*margb + "px";
+          aacode.style["left"] = margb + "px";
+          aacode.style["top"] = margb + "px";
+          aacode.style["font-size"] = txtfont + "px";
+          aacode.style["width"] = txtwidth + "px";
+          can.style["left"] = iconb + 2*margb + "px";
+          can.style["top"] = iconb + 3*margb + "px";
+          can.style["width"] = Math.max(window.innerWidth, 400) - (pad + iconb + 3*margb) + "px";
+          can.style["height"] = Math.max(window.innerHeight, 275) - (pad + iconb + 4*margb) + "px";
+          svg.style["left"] = iconb + 2*margb + "px";
+          svg.style["top"] = iconb + 3*margb + "px";
+          svg.style["width"] = Math.max(window.innerWidth, 400) - (pad + iconb + 3*margb) + "px";
+          svg.style["height"] = Math.max(window.innerHeight, 275) - (pad + iconb + 4*margb) + "px";
+          redrawAll();
+        }
+        function getcode(index, sd, closing = false) {
+          let total = "";
+          let inr, infr, seq, fseq, e1, e2;
+          let closefring = false;
+          if (tree.length === 0) { return ""; }
+          if (sd === "d" && !closing) { total += "="; }
+          total += "[" + tree[index].sym;
+          if (tree[index].nH > 0)
+          {
+            total += "H";
+            if (tree[index].nH > 1) { total += tree[index].nH; }
+          }
+          if (tree[index].chrg === 1) { total += "-"; }
+          if (tree[index].chrg === 2) { total += "+"; }
+          total += "]";
+          inr = isinring(index);
+          infr = isinfring(index);
+          if (inr < 0 && infr < 0) {
+            for (let j = 0; j < tree[index].children.length; j += 1) {
+              if (j < tree[index].children.length-1) { total +=  "("; }
+              total += getcode(tree[index].children[j], tree[index].bonds[j]);
+              if (j < tree[index].children.length-1) { total +=  ")"; }
+            }
+          } else if (infr >= 0) {
+          } else if (index === rings[inr].ori) {
+            // first Ca may be origin and have nonring children
+            if (index === 0) {
+              for (let k = 0; k < tree[0].children.length; k += 1) {
+                if (isinring(tree[0].children[k]) < 0) {
+                  total += "(" + getcode(tree[0].children[k], tree[0].bonds[k]) + ")";
+                }
+              }
+            }
+            seq = rings[inr].seq.slice();
+            seq.unshift(index);
+            seq.push(index);
+            total += (tree[rings[inr].ori].side+1).toString();
+            for (let j = 1; j < seq.length-1; j += 1) {
+              e1 = tree[seq[j]].children.indexOf(seq[j-1]);
+              e2 = tree[seq[j-1]].children.indexOf(seq[j]);
+              if (e1 >= 0) { total += getcode(seq[j], tree[seq[j]].bonds[e1], closefring); }
+              else if (e2 >= 0) { total += getcode(seq[j], tree[seq[j-1]].bonds[e2], closefring); }
+              for (let k = 0; k < tree[seq[j]].children.length; k += 1) {
+                if (isinring(tree[seq[j]].children[k]) < 0 && isinfring(tree[seq[j]].children[k]) < 0) {
+                  total += "(" + getcode(tree[seq[j]].children[k], tree[seq[j]].bonds[k]) + ")";
+                }
+              }
+              if (closefring) {
+                total += (tree[rings[inr].ori].side+2).toString();
+                closefring = false;
+              }
+              if (seq[j] === rings[inr].fori) {
+                fseq = rings[inr].fseq.slice();
+                fseq.unshift(rings[inr].fori);
+                total += (tree[rings[inr].ori].side+2).toString();
+                for (let jj = 1; jj < fseq.length-1; jj += 1) {
+                  e1 = tree[fseq[jj]].children.indexOf(fseq[jj-1]);
+                  e2 = tree[fseq[jj-1]].children.indexOf(fseq[jj]);
+                  if (e1 >= 0) { total += getcode(fseq[jj], tree[fseq[jj]].bonds[e1]); }
+                  else if (e2 >= 0) { total += getcode(fseq[jj], tree[fseq[jj-1]].bonds[e2]); }
+                  for (let kk = 0; kk < tree[fseq[jj]].children.length; kk += 1) {
+                    if (isinring(tree[fseq[jj]].children[kk]) < 0 && isinfring(tree[fseq[jj]].children[kk]) < 0) {
+                      total += "(" + getcode(tree[fseq[jj]].children[kk], tree[fseq[jj]].bonds[kk]) + ")";
+                    }
+                  }
+                }
+                e1 = tree[fseq[fseq.length-1]].children.indexOf(fseq[fseq.length-2]);
+                e2 = tree[fseq[fseq.length-2]].children.indexOf(fseq[fseq.length-1]);
+                if (e1 >= 0) {
+                  if (tree[fseq[fseq.length-1]].bonds[e1] === "d") { total += "="; }
+                } else if (e2 >= 0) {
+                  if (tree[fseq[fseq.length-2]].bonds[e2] === "d") { total += "="; }
+                }
+                closefring = true;
+              }
+            }
+            e1 = tree[seq[seq.length-1]].children.indexOf(seq[seq.length-2]);
+            e2 = tree[seq[seq.length-2]].children.indexOf(seq[seq.length-1]);
+            if (e1 >= 0) {
+              if (tree[seq[seq.length-1]].bonds[e1] === "d") { total += "="; }
+            } else if (e2 >= 0) {
+              if (tree[seq[seq.length-2]].bonds[e2] === "d") { total += "="; }
+            }
+            total += (tree[rings[inr].ori].side+1).toString();
+          }
+          if (sd === "d" && closing) { total += "="; }
+          return total;
+        }
+        
+        function readcode(str, parent) {
+          let par = parent;
+          let i = 0, j, k;
+          let ch;
+          let nH, chrg;
+          let openring = [];
+          while (i < str.length) {
+            ch = str.charAt(i);
+            if (ch === "[") {
+              j = 2;
+              nH = 0;
+              chrg = 0;
+              while ((i + j) < str.length) {
+                ch = str.charAt(i + j);
+                j += 1;
+                if (ch === "]") { break; }
+                if (ch === "H") { nH = 1; }
+                if (ch.match(/[1-3]{1}/)) { nH += Number(ch)-1; }
+                if (ch === "-") { chrg = 1; }
+                if (ch === "+") { chrg = 2; }
+              }
+              ch = str.charAt(i + 1);
+              if (ch.match(/C|N|O|S/)) {
+                if (par < 0) { tree.push(new Elem(3, 0, 0, "C", nH, chrg, [], [], par, 2**48)); }
+                else {
+                  tree.push(new Elem(2, -1, -1, ch, nH, chrg, [], [], par, 0));
+                  tree[par].children.push(counter);
+                  ch = str.charAt(i - 1);
+                  if (ch === "=") { tree[par].bonds.push("d"); }
+                  else { tree[par].bonds.push("s"); }
+                }
+                par = counter;
+                counter += 1;
+                recalcclasses(true);
+              }
+              if (openring.length === 1) { rings[rings.length-1].seq.push(par); }
+              if (openring.length === 2) { rings[rings.length-1].fseq.push(par); }
+              i += j - 1;
+            } else if (ch === "(") {
+              j = i + 1;
+              k = 1;
+              while (k > 0 && j < str.length) {
+                ch = str.charAt(j);
+                j += 1;
+                if (ch === "(") { k += 1; }
+                else if (ch === ")") { k -= 1; }
+              }
+              readcode(str.slice(i + 1, j - 1), par);
+              i = j - 1;
+            } else if (ch.match(/[0-9]{1}/)) {
+              if (openring.length === 0) {
+                rings.push(new Ring(-1, par, [], -1, []));
+                tree[par].maxch -= 1;
+                openring.push([par, ch]);
+              } else if (openring.length === 1) {
+                if (ch === openring[0][1]) {
+                  tree[par].children.push(openring.pop()[0]);
+                  ch = str.charAt(i - 1);
+                  if (ch === "=") { tree[par].bonds.push("d"); }
+                  else { tree[par].bonds.push("s"); }
+                } else {
+                  rings[rings.length-1].fori = par;
+                  tree[par].maxch -= 1;
+                  openring.push([par, ch]);
+                }
+              } else if (openring.length === 2) {
+                rings[rings.length-1].seq.push(par);
+                tree[par].children.push(openring.pop()[0]);
+                ch = str.charAt(i - 1);
+                if (ch === "=") { tree[par].bonds.push("d"); }
+                else { tree[par].bonds.push("s"); }
+              }
+            }
+            i += 1;
+          }
+        }
+
+        function aacode_input(e) {
+          let nodeCopy;
+          if (aacode.value === "") {
+            butc.style["display"] = "none";
+            buta.style["display"] = "inline";
+            deactivate_buts();
+            can.style["pointer-events"] = "auto";
+          } else {
+            buta.style["display"] = "none";
+            butc.style["display"] = "inline";
+            activate_buts();
+            can.style["pointer-events"] = "none";
+          }
+          while (can.lastElementChild) {
+            can.removeChild(can.lastElementChild);
+          }
+          while (svg.lastElementChild) {
+            svg.removeChild(svg.lastElementChild);
+          }
+          counter = 0;
+          tree = [];
+          rings = [];
+          code = "";
+          readcode(aacode.value, -1);
+          recalcclasses();
+          code = getcode(0, "s");
+          if (aacode.value === code) {
+            for (let i = 0; i < counter; i += 1) {
+              if (tree[i].sym === "C") {
+                if (tree[i].main >= 0 && tree[i].side >= 0) { nodeCopy = document.getElementById("but_A").cloneNode(true); }
+                else { nodeCopy = document.getElementById("but_C").cloneNode(true); }
+              } else { nodeCopy = document.getElementById("but_" + tree[i].sym).cloneNode(true); }
+              nodeCopy.id = "elem_" + i;
+              elem_addevents(nodeCopy);
+              can.appendChild(nodeCopy);
+              if (tree[i].chrg > 0) {
+                nodeCopy = document.getElementById(tree[i].chrg === 1 ? "but_minus" : "but_plus").cloneNode(true);
+                nodeCopy.id = "charge_" + i;
+                nodeCopy.addEventListener("click", removecharge);
+                nodeCopy.style["pointer-events"] = "auto";
+                nodeCopy.setAttribute("mydraggable", "false");
+                nodeCopy.classList.add("elem_pm");
+                can.appendChild(nodeCopy);
+              }
+            }
+            rescaleAll();
+            history.push(new Snapshot());
+            undo.classList.remove("but_dis");
+            aacode.classList.add("shadow");
+            setTimeout(() => { e.target.classList.remove("shadow"); }, 500);
+          } else {
+            aacode.classList.add("redshadow");
+            setTimeout(() => { e.target.classList.remove("redshadow"); }, 500);
+          }
+        }
+
+        function fdrop(target) {
+          if (target.id === "can") {
+            target.classList.remove("shadow");
+            let id = dragSource.id;
+            if (id === "but_A") {
+              let nodeCopy = document.getElementById(id).cloneNode(true);
+              nodeCopy.id = "elem_" + counter;
+              elem_addevents(nodeCopy);
+              tree.push(new Elem(3, 0, 0, "C", 0, 0, [], [], -1, 2**48));
+              can.appendChild(nodeCopy);
+              counter += 1;
+              recalcclasses();
+              code = getcode(0, "s");
+              aacode.value = code;
+              rescaleAll();
+              history.push(new Snapshot());
+              undo.classList.remove("but_dis");
+              buta.style["display"] = "none";
+              butc.style["display"] = "inline";
+              activate_buts();
+              can.style["pointer-events"] = "none";
+            }
+          } else if (target.id.split('_')[0] === "elem") {
+            lock = false;
+            if (target.classList.contains("redshadow")) { target.classList.remove("redshadow"); preventClick = true; setTimeout(() => {preventClick = false;}, 50); return false; }
+            else if (target.classList.contains("yellowshadow")) {
+              target.classList.remove("yellowshadow");
+              let id = dragSource.id;
+              let at = Number(target.id.split('_')[1]);
+              if (id === "but_C" || id === "but_N" || id === "but_O" || id === "but_S") {
+                tree[at].sym = id.split('_')[1];
+                target.setAttribute("src", "toolbar/" + id.split('_')[1] + ".svg");
+              } else if (id === "but_plus" || id === "but_minus") {
+                if (id === "but_minus") { tree[at].chrg = 1; }
+                if (id === "but_plus") { tree[at].chrg = 2; }
+                let item = document.getElementById("charge_" + at);
+                item.setAttribute("src", "toolbar/" + id.split('_')[1] + ".svg");
+              }
+            }
+            else if (target.classList.contains("shadow")) {
+              target.classList.remove("shadow");
+              let id = dragSource.id;
+              if (id === "but_C" || id === "but_N" || id === "but_O" || id === "but_S") {
+                let nodeCopy = document.getElementById(id).cloneNode(true);
+                nodeCopy.id = "elem_" + counter;
+                elem_addevents(nodeCopy);
+                let par = Number(target.id.split('_')[1]);
+                tree[par].children.push(counter);
+                tree[par].bonds.push("s");
+                tree.push(new Elem(2, -1, -1, id.split('_')[1], 0, 0, [], [], par, 0));
+                can.appendChild(nodeCopy);
+                counter += 1;
+              } else if (id === "but_plus" || id === "but_minus") {
+                let nodeCopy = document.getElementById(id).cloneNode(true);
+                let at = Number(target.id.split('_')[1]);
+                nodeCopy.id = "charge_" + at;
+                nodeCopy.addEventListener("click", removecharge);
+                nodeCopy.style["pointer-events"] = "auto";
+                nodeCopy.setAttribute("mydraggable", "false");
+                nodeCopy.classList.add("elem_pm");
+                if (id === "but_minus") { tree[at].chrg = 1; }
+                if (id === "but_plus") { tree[at].chrg = 2; }
+                can.appendChild(nodeCopy);
+              } else if (id.split('_')[0] === "elem") {
+                newring(Number(id.split('_')[1]), Number(target.id.split('_')[1]));
+              }
+            }
+            recalcclasses();
+            code = getcode(0, "s");
+            aacode.value = code;
+            rescaleAll();
+            history.push(new Snapshot());
+            undo.classList.remove("but_dis");
+          }
+        }
+        function newring(start, end) {
+          tree[start].children.push(end);
+          tree[start].bonds.push("s");
+          tree[end].maxch -= 1;
+          // first proline ring
+          if (start === 0 && tree[end].main < 0 && tree[end].sym === "N") { 
+              tree[end].main = 0; tree[end].side = 0; tree[end].cls -= 2**50;
+          }
+          let exring = checkringexists(tree[start].side);
+          if (exring < 0) { rings.push(new Ring(-1, cur_ori, cur_seq, cur_fori, cur_fseq)); }
+          else { rings[exring] = new Ring(-1, cur_ori, cur_seq, cur_fori, cur_fseq); }
+        }
+        function isinring(index) {
+          for (let i = 0; i < rings.length; i += 1) {
+            if (rings[i].seq.includes(index) || rings[i].ori === index) { return i; }
+          }
+          return -1;
+        }
+        function checkringexists(side) {
+          for (let i = 0; i < rings.length; i += 1) {
+            if (tree[rings[i].ori].side === side) { return i; }
+          }
+          return -1;
+        }
+        function isinfring(index) {
+          for (let i = 0; i < rings.length; i += 1) {
+            if (rings[i].fseq.includes(index) || rings[i].fori === index) { return i; }
+          }
+          return -1;
+        }
+        function sumweights(index, sd) {
+          let total;
+          let inr, infr, seq, a1, a2, e1, e2;
+          if (tree[index].cls < -(2**49) ) { tree[index].cls = -(2**50); }
+          else if (tree[index].cls < 2**48-1) { tree[index].cls = 0; }
+          else if (tree[index].cls > 2**48-1) { tree[index].cls = 2**48; }
+          total = wts[sd] + wts[tree[index].sym] + wts["chrg"]*tree[index].chrg + wts["H"]*tree[index].nH;
+          inr = isinring(index);
+          infr = isinfring(index);
+          if (inr < 0 && infr < 0) {
+            for (let j = 0; j < tree[index].children.length; j += 1) {
+              total += sumweights(tree[index].children[j], tree[index].bonds[j])/2**8;
+            }
+          } else if (index === rings[inr].ori) {
+            // first proline ring
+            if (index === 0) {
+              for (let k = 0; k < tree[0].children.length; k += 1) {
+                if (isinring(tree[0].children[k]) < 0 && isinfring(tree[0].children[k]) < 0) {
+                  tree[0].cls += sumweights(tree[0].children[k], tree[0].bonds[k])/2**8;
+                }
+              }
+            }
+            seq = rings[inr].seq.slice();
+            seq.unshift(index);
+            seq.push(index);
+            for (let j = 1; j < seq.length-1; j += 1) {
+              a1 = tree[seq[j]];
+              if (a1.cls < -(2**49) ) { a1.cls = -(2**50); }
+              else if (a1.cls < 2**48-1) { a1.cls = 0; }
+              else if (a1.cls > 2**48-1) { a1.cls = 2**48; }
+              a1.cls += wts[a1.sym] + wts["chrg"]*a1.chrg + wts["H"]*a1.nH;
+              if (j < (seq.length-1)/2) {
+                a2 = tree[seq[j-1]];
+                e1 = a2.children.indexOf(seq[j]);
+                e2 = a1.children.indexOf(seq[j-1]);
+              } else if (j > (seq.length-1)/2) {
+                a2 = tree[seq[j+1]];
+                e1 = a2.children.indexOf(seq[j]);
+                e2 = a1.children.indexOf(seq[j+1]);
+              }
+              if (e1 >= 0) { a1.cls += wts[a2.bonds[e1]]; }
+              else if (e2 >= 0) { a1.cls += wts[a1.bonds[e2]]; }
+              for (let k = 0; k < a1.children.length; k += 1) {
+                inr = isinring(a1.children[k]);
+                infr = isinfring(a1.children[k]);
+                if (inr < 0 && infr < 0) { a1.cls += sumweights(a1.children[k], a1.bonds[k])/2**8; }
+              }
+              if (a1.cls > 0) { total += a1.cls/2**8; }
+            }
+          }
+          tree[index].cls += total;
+          return total;
+        }
+        function checkCachildren(index) {
+          for (let j = 0; j < tree[index].children.length; j += 1) {
+            let c = tree[tree[index].children[j]];
+            if (c.sym === "C" && c.main < 0 && c.children.length === 2) { 
+              if ((c.children.some((child) => tree[child].sym === "O") &&
+                    c.children.some((child) => tree[child].sym === "N")) ||
+                  (c.children.every((child) => tree[child].sym === "O"))) {
+                    return true;
+              }
+            }
+          }
+          return false;
+        }
+        function checkmainNexists(mindex) {
+          for (let i = 1; i < counter; i += 1) {
+            if (tree[i].main === mindex && tree[i].side === mindex && tree[i].sym === "N") { return true; }
+          }
+          return false;
+        }
+        function checkmainCexists(mindex) {
+          for (let i = 1; i < counter; i += 1) {
+            if (tree[i].main === mindex && tree[i].side < 0 && tree[i].sym === "C") { return true; }
+          }
+          return false;
+        }
+        function checkmainCaexists(mindex) {
+          for (let i = 1; i < counter; i += 1) {
+            if (tree[i].main === mindex && tree[i].side === mindex && tree[i].sym === "C") { return true; }
+          }
+          return false;
+        }
+        function assignsides(index, path) {
+          if (tree[index].main < 0 && tree[index].side < 0) { tree[index].side = tree[tree[index].parent].side; }
+          for (let j = 0; j < tree[index].children.length; j += 1) {
+            let k = tree[index].children[j];
+            if (!path.includes(k)) { assignsides(k, path.concat(index)); }
+          }
+        }
+        function recalcclasses(onlymain = false) {
+          let item;
+          let par, child;
+          let inr, clss, seq, fseq, a1, a2;
+          let anysides = false;
+          if (tree.length === 0) { return; }
+          for (let i = 1; i < counter; i += 1) {
+            par = tree[tree[i].parent];
+            if (tree[i].parent === 0 && tree[i].main < 0 && tree[i].sym === "N" && !checkmainNexists(0)) { 
+              tree[i].main = 0; tree[i].side = 0; tree[i].cls -= 2**50;
+            }
+            if (par.sym === "C" && par.main >= 0 && par.side >= 0 &&
+                tree[i].sym === "C" && tree[i].main < 0 && tree[i].children.length === 2 && !checkmainCexists(par.main)) { 
+              if ((tree[i].children.some((child) => tree[child].sym === "O") &&
+                    tree[i].children.some((child) => tree[child].sym === "N")) ||
+                  (tree[i].children.every((child) => tree[child].sym === "O"))) {
+                tree[i].main = par.main; tree[i].side = -1;
+                tree[i].cls += 2**48;
+                a1 = tree[tree[i].children[0]];
+                a2 = tree[tree[i].children[1]];
+                a1.side = -1;
+                a2.side = -1;
+                if (a1.sym === "O") { a1.maxch = 0; }
+                if (a2.sym === "O") { a2.maxch = 0; }
+              }
+            }
+            if (par.sym === "C" && par.main >= 0 && par.side < 0 &&
+                tree[i].sym === "N" && tree[i].main < 0 && !checkmainNexists(par.main+1)) { 
+              tree[i].main = par.main+1; tree[i].side = par.main+1;
+            }
+            if (par.sym === "N" && par.main >= 0 && par.side >= 0 &&
+                tree[i].main < 0 && !checkmainCaexists(par.main)) {
+              inr = isinring(tree[i].parent);
+              if (tree[i].sym === "C" && checkCachildren(i)) {
+                tree[i].main = par.main; tree[i].side = par.side;
+                tree[i].cls += 2**48;
+                item = document.getElementById("elem_" + i);
+                if (item) { item.setAttribute("src", "toolbar/A.svg"); }
+              } else if (inr >= 0 && tree[i].parent === rings[inr].ori) {
+                seq = rings[inr].seq;
+                let j = seq[seq.length-seq.indexOf(i)-1];
+                if (tree[j].sym === "C" && checkCachildren(j)) {
+                  tree[j].main = par.main; tree[j].side = par.side;
+                  tree[j].cls += 2**48;
+                  item = document.getElementById("elem_" + j);
+                  if (item) { item.setAttribute("src", "toolbar/A.svg"); }
+                }
+              }
+            }
+          }
+          if (onlymain) { return; }
+          for (let i = 0; i < counter; i += 1) {
+            if ((tree[i].sym === "C" || tree[i].sym === "N") && tree[i].main >= 0 && tree[i].side >= 0) { assignsides(i, []); }
+          }
+          for (let i = 0; i < counter; i += 1) {
+            if (tree[i].main < 0 && tree[i].side >= 0) { anysides = true; break; }
+          }
+          if (anysides) { activate_switches(); }
+          else { deactivate_switches(); }
+          sumweights(0, "s");
+          for (let i = 0; i < counter; i += 1) {
+            clss = [];
+            for (let j = 0; j < tree[i].children.length; j += 1) { clss.push(tree[tree[i].children[j]].cls); }
+            if (clss.length === 2) {
+              if (clss[1] < clss[0]) {
+                tree[i].bonds =    [   tree[i].bonds[1],    tree[i].bonds[0]];
+                tree[i].children = [tree[i].children[1], tree[i].children[0]];
+              }
+            } else if (clss.length === 3) {
+              if        (clss[2] <= clss[1] && clss[1] <= clss[0]) {
+                tree[i].bonds =    [   tree[i].bonds[2],    tree[i].bonds[1],    tree[i].bonds[0]];
+                tree[i].children = [tree[i].children[2], tree[i].children[1], tree[i].children[0]];
+              } else if (clss[2] <= clss[0] && clss[0] <= clss[1]) {
+                tree[i].bonds =    [   tree[i].bonds[2],    tree[i].bonds[0],    tree[i].bonds[1]];
+                tree[i].children = [tree[i].children[2], tree[i].children[0], tree[i].children[1]];
+              } else if (clss[1] <= clss[2] && clss[2] <= clss[0]) {
+                tree[i].bonds =    [   tree[i].bonds[1],    tree[i].bonds[2],    tree[i].bonds[0]];
+                tree[i].children = [tree[i].children[1], tree[i].children[2], tree[i].children[0]];
+              } else if (clss[1] <= clss[0] && clss[0] <= clss[2]) {
+                tree[i].bonds =    [   tree[i].bonds[1],    tree[i].bonds[0],    tree[i].bonds[2]];
+                tree[i].children = [tree[i].children[1], tree[i].children[0], tree[i].children[2]];
+              } else if (clss[0] <= clss[2] && clss[2] <= clss[1]) {
+                tree[i].bonds =    [   tree[i].bonds[0],    tree[i].bonds[2],    tree[i].bonds[1]];
+                tree[i].children = [tree[i].children[0], tree[i].children[2], tree[i].children[1]];
+              }
+            }
+          }
+          for (let i = 0; i < rings.length; i += 1) {
+            seq = rings[i].seq;
+            fseq = rings[i].fseq;
+            a1 = tree[seq[0]];
+            a2 = tree[seq[seq.length-1]];
+            if (a1.cls > a2.cls) {
+              seq.reverse();
+              if (rings[i].fori >= 0) {
+                fseq.unshift(rings[i].fori);
+                rings[i].fori = fseq.pop();
+                fseq.reverse();
+              }
+              continue;
+            }
+            if (a1.cls < a2.cls) { continue; }
+            a1 = tree[seq[1]];
+            a2 = tree[seq[seq.length-2]];
+            if (a1.cls > a2.cls) {
+              seq.reverse();
+              if (rings[i].fori >= 0) {
+                fseq.unshift(rings[i].fori);
+                rings[i].fori = fseq.pop();
+                fseq.reverse();
+              }
+            }
+          }
+        }
+        function elem_addevents(nodeCopy) {
+            nodeCopy.addEventListener("click", toggleHremoveside);
+            nodeCopy.style["pointer-events"] = "auto";
+            nodeCopy.style["-webkit-touch-callout"] = "none";
+            nodeCopy.style["-webkit-user-select"] = "none";
+            nodeCopy.style["user-select"] = "none";
+            nodeCopy.classList.add("elem");
+        }
+        function shadowon(target) {
+          if (!lock && target) {
+            lock = true;
+            let id = dragSource.id;
+            if (target.id === "can") {
+              if (id === "but_A") { target.classList.add("shadow"); }
+            } else if (target.id.split('_')[0] === "elem") {
+              let tarelem = tree[Number(target.id.split('_')[1])];
+              if (replace) {
+                if ((id === "but_C" || id === "but_N" || id === "but_O" || id === "but_S") && tarelem.main < 0 && tarelem.side >= 0) { target.classList.add("yellowshadow"); }
+                else if ((id === "but_plus" || id === "but_minus") && tarelem.chrg > 0) { target.classList.add("yellowshadow"); }
+                else { target.classList.add("redshadow"); }
+              } else if (!remove) {
+                if (id === "but_plus" || id === "but_minus") {
+                  if (tarelem.chrg === 0) { target.classList.add("shadow"); }
+                  else { target.classList.add("redshadow"); }
+                } else {
+                  if (tarelem.children.length >= tarelem.maxch) { target.classList.add("redshadow"); }
+                  else {
+                    if (id === "but_C" || id === "but_N" || id === "but_O" || id === "but_S") {
+                      if (tarelem.cls < -(2**49)) { target.classList.add("redshadow"); }
+                      else { target.classList.add("shadow"); }
+                    } else if (id.split('_')[0] === "elem") {
+                      let start = Number(id.split('_')[1]);
+                      let end = Number(target.id.split('_')[1]);
+                      if (checkring(start, end)) {
+                        target.classList.add("shadow");
+                        drawprovbond(start, end);
+                      }
+                      else { target.classList.add("redshadow"); }
+                    }
+                  }
+                }
+              } else { target.classList.add("redshadow"); }
+            }
+          }
+        }
+        function drawprovbond(start, end) {
+          let shift = marg + icon/2;
+          let shape, x1, y1, x2, y2, dx, dy;
+          shape = document.createElementNS(svgns, "line");
+          x1 = tree[start].x + shift;
+          y1 = tree[start].y + shift;
+          x2 = tree[end].x + shift;
+          y2 = tree[end].y + shift;
+          dx = getdx(x1, y1, x2, y2, icon/2);
+          dy = getdy(x1, y1, x2, y2, icon/2);
+          shape.setAttribute("id", "provbond");
+          shape.setAttribute("x1", x1 + dx);
+          shape.setAttribute("y1", y1 + dy);
+          shape.setAttribute("x2", x2 - dx);
+          shape.setAttribute("y2", y2 - dy);
+          shape.style["stroke-width"] = bondstroke + "px";
+          shape.style["stroke"] = "black";
+          shape.style["-webkit-touch-callout"] = "none";
+          shape.style["-webkit-user-select"] = "none";
+          shape.style["user-select"] = "none";
+          svg.appendChild(shape);
+        }
+        function checkring(start, end) {
+          cur_ori = -1;
+          cur_fori = -1;
+          cur_seq = [];
+          cur_fseq = [];
+          // first proline ring
+          if (start === 0 && tree[end].main < 0 && tree[end].sym === "N") {
+			        if (tree[end].children.length >= tree[end].maxch-1) { return false; }
+          }
+          if (start === end) { return false; }
+          // too many children already
+          else if (tree[start].children.length >= tree[start].maxch) { return false; }
+          // root Ca is nobody's child, no ring end allowed
+          else if (0 === end) { return false; }
+          // trying to connect different side chains, not allowed
+          else if (tree[start].side !== tree[end].side) { return false; }
+          else {
+            let exring = checkringexists(tree[start].side);
+            // fused ring already exists within this chain
+            if (exring >= 0) { if (rings[exring].fseq.length > 0) { return false; } }
+            let sbtr = [start];
+            let ebtr = [end];
+            let rbtr = [];
+            let s, e, r;
+            let spar, epar, rpar;
+            let fused = false, change = true;
+            let seq, ori;
+            while(change) {
+              change = false;
+              s = sbtr[sbtr.length-1];
+              if (isinring(s) < 0 && s >= 0) {
+                spar = tree[s].parent;
+                if (spar >= 0) { sbtr.push(spar); change = true; }
+              } else if (exring >= 0 && !fused) {
+                fused = true;
+                seq = rings[exring].seq.slice();
+                ori = rings[exring].ori;
+                seq.unshift(ori);
+                seq.push(ori);
+                if (ori === s) {
+                  spar = seq[1];
+                  rpar = seq[seq.length-2];
+                } else {
+                  spar = seq[seq.indexOf(s)-1];
+                  rpar = seq[seq.indexOf(s)+1];
+                }
+                rbtr = sbtr.slice();
+                sbtr.push(spar);
+                rbtr.push(rpar);
+                change = true;
+              } else if (fused && s >= 0) {
+                spar = tree[s].parent;
+                if (isinring(spar) < 0) { sbtr.push(spar); change = true; }
+              }
+              e = ebtr[ebtr.length-1];
+              if (isinring(e) < 0 && e >= 0) {
+                epar = tree[e].parent;
+                if (epar >= 0) { ebtr.push(epar); change = true; }
+              } else if (exring >= 0 && !fused) {
+                fused = true;
+                seq = rings[exring].seq.slice();
+                ori = rings[exring].ori;
+                seq.unshift(ori);
+                seq.push(ori);
+                if (ori === e) {
+                  epar = seq[1];
+                  rpar = seq[seq.length-2];
+                } else {
+                  epar = seq[seq.indexOf(e)-1];
+                  rpar = seq[seq.indexOf(e)+1];
+                }
+                rbtr = ebtr.slice();
+                ebtr.push(epar);
+                rbtr.push(rpar);
+                change = true;
+              } else if (fused && e >= 0) {
+                epar = tree[e].parent;
+                if (isinring(epar) < 0) { ebtr.push(epar); change = true; }
+              }
+              if (fused) {
+                r = rbtr[rbtr.length-1];
+                if (isinring(r) < 0 && r >= 0) {
+                  rpar = tree[r].parent;
+                  if (rpar >= 0) { rbtr.push(rpar); change = true; }
+                } else if (r >= 0) {
+                  rpar = tree[r].parent;
+                  if (isinring(rpar) < 0) { rbtr.push(rpar); change = true; }
+                }
+              }
+            }
+            // trying to create second ring not fused to the existing within same side chain, not allowed
+            if (exring >= 0 && !fused) { return false; }
+            if (fused) {
+              if (ebtr[0] === rbtr[0]) {
+                for (let i = 0; i < sbtr.length; i += 1) {
+                  ori = ebtr.indexOf(sbtr[i]);
+                  if (ori >= 0) {
+                    cur_fori = sbtr[i];
+                    cur_fseq = sbtr.slice(0,i).reverse().concat(ebtr.slice(0,ori));
+                    if (cur_fseq.length < 2) { return false; }
+                    if (cur_fseq.length > 5) { return false; }
+                    break;
+                  }
+                  ori = rbtr.indexOf(sbtr[i]);
+                  if (ori >= 0) {
+                    cur_fori = sbtr[i];
+                    cur_fseq = sbtr.slice(0,i).reverse().concat(rbtr.slice(0,ori));
+                    if (cur_fseq.length < 2) { return false; }
+                    if (cur_fseq.length > 5) { return false; }
+                    break;
+                  }
+                }
+              }
+              if (sbtr[0] === rbtr[0]) {
+                for (let i = 0; i < ebtr.length; i += 1) {
+                  ori = sbtr.indexOf(ebtr[i]);
+                  if (ori >= 0) {
+                    cur_fori = ebtr[i];
+                    cur_fseq = ebtr.slice(0,i).reverse().concat(sbtr.slice(0,ori));
+                    if (cur_fseq.length < 2) { return false; }
+                    if (cur_fseq.length > 5) { return false; }
+                    break;
+                  }
+                  ori = rbtr.indexOf(ebtr[i]);
+                  if (ori >= 0) {
+                    cur_fori = ebtr[i];
+                    cur_fseq = ebtr.slice(0,i).reverse().concat(rbtr.slice(0,ori));
+                    if (cur_fseq.length < 2) { return false; }
+                    if (cur_fseq.length > 5) { return false; }
+                    break;
+                  }
+                }
+              }
+              // didn't meet, no ring is possible
+              if (cur_fori < 0) { return false; }
+              // swap if fori < ori
+              if (cur_fori < rings[exring].ori) {
+                cur_ori = cur_fori;
+                cur_seq = cur_fseq.slice();
+                cur_fori = rings[exring].ori;
+                cur_fseq = rings[exring].seq.slice();
+              } else {
+                cur_ori = rings[exring].ori;
+                cur_seq = rings[exring].seq.slice();
+              }
+              // align directions
+              if (cur_seq.includes(cur_fseq[0])) {
+                if (cur_seq.indexOf(cur_fori) > cur_seq.indexOf(cur_fseq[0])) {
+                  cur_fseq.push(cur_fori);
+                  cur_fori = cur_fseq.shift();
+                }
+              } else if (cur_seq.includes(cur_fseq[cur_fseq.length-1])) {
+                if (cur_seq.indexOf(cur_fori) > cur_seq.indexOf(cur_fseq[cur_fseq.length-1])) {
+                  cur_fseq.unshift(cur_fori);
+                  cur_fori = cur_fseq.pop();
+                  cur_fseq.reverse();
+                }
+              } else { return false; }
+              // prevent fused ring on first Ca
+              if (cur_ori === cur_fori) { return false; }
+              return true;
+            } else {
+              for (let i = 0; i < sbtr.length; i += 1) {
+                ori = ebtr.indexOf(sbtr[i]);
+                if (ori >= 0) {
+                  cur_ori = sbtr[i];
+                  cur_seq = sbtr.slice(0,i).reverse().concat(ebtr.slice(0,ori));
+                  if (cur_seq.length < 2) { return false; }
+                  if (cur_seq.length > 5) { return false; }
+                  return true;
+                }
+              }
+            }
+          }
+        }
+        function shadowoff(target) {
+          lock = false;
+          let item = document.getElementById("provbond");
+          if (item) { svg.removeChild(item); }
+          target.classList.remove("shadow");
+          target.classList.remove("redshadow");
+          target.classList.remove("yellowshadow");
+        }
+        function replace_switch(e) {
+          if (!swrep.classList.contains("but_dis")) {
+            if (replace) {
+              replace = false;
+              swrep.setAttribute("src", "toolbar/replace_off.svg");
+              swrep.classList.remove("yellowshadow");
+            } else {
+              replace = true;
+              swrep.setAttribute("src", "toolbar/replace_on.svg");
+              swrep.classList.add("yellowshadow");
+              if (remove) {
+                remove = false;
+                activate_buts();
+                swrem.setAttribute("src", "toolbar/remove_off.svg");
+                swrem.classList.remove("redshadow");
+              }
+            }
+          }
+        }
+        function remove_switch(e) {
+          if (!swrem.classList.contains("but_dis")) {
+            if (remove) {
+              remove = false;
+              activate_buts();
+              swrem.setAttribute("src", "toolbar/remove_off.svg");
+              swrem.classList.remove("redshadow");
+            } else {
+              remove = true;
+              deactivate_buts();
+              swrem.setAttribute("src", "toolbar/remove_on.svg");
+              swrem.classList.add("redshadow");
+              if (replace) {
+                replace = false;
+                swrep.setAttribute("src", "toolbar/replace_off.svg");
+                swrep.classList.remove("yellowshadow");
+              }
+            }
+          }
+        }
+        // function copy_click(e) {
+        //   navigator.clipboard.writeText(aacode.value);
+        //   e.target.classList.add("shadow");
+        //   setTimeout(() => { e.target.classList.remove("shadow"); }, 500);
+        // }
+        function undo_click(e) {
+          let item;
+          if (!undo.classList.contains("but_dis")) {
+            history.pop();
+            if (history.length === 1) { undo.classList.add("but_dis"); }
+            let snap = history[history.length-1];
+            cont.removeChild(can);
+            const domparser = new DOMParser();
+            can = domparser.parseFromString(snap.can, "text/html").body.firstElementChild;
+            cont.appendChild(can);
+            counter = snap.counter;
+            tree = JSON.parse(snap.tree);
+            rings = JSON.parse(snap.rings);
+            code = snap.code;
+            aacode.value = code;
+            for (let i = 0; i < counter; i += 1) {
+              item = document.getElementById("elem_" + i);
+              elem_addevents(item);
+              if (tree[i].chrg > 0) {
+                item = document.getElementById("charge_" + i);
+                item.addEventListener("click", removecharge);
+              }
+            }
+            while (svg.lastElementChild) {
+              svg.removeChild(svg.lastElementChild);
+            }
+            rescaleAll();
+            if (aacode.value === "") {
+              butc.style["display"] = "none";
+              buta.style["display"] = "inline";
+              deactivate_buts();
+              can.style["pointer-events"] = "auto";
+            } else {
+              buta.style["display"] = "none";
+              butc.style["display"] = "inline";
+              activate_buts();
+              can.style["pointer-events"] = "none";
+            }
+            let anysides = false;
+            for (let i = 0; i < counter; i += 1) {
+              if (tree[i].main < 0 && tree[i].side >= 0) { anysides = true; break; }
+            }
+            if (anysides) { activate_switches(); }
+            else { deactivate_switches(); }
+            e.target.classList.add("shadow");
+            setTimeout(() => { e.target.classList.remove("shadow"); }, 500);
+          }
+        }
+
+        function activate_switches() {
+          swrep.classList.remove("but_dis");
+          swrem.classList.remove("but_dis");
+        }
+        function deactivate_switches() {
+          if (replace) {
+            replace = false;
+            swrep.setAttribute("src", "toolbar/replace_off.svg");
+            swrep.classList.remove("yellowshadow");
+          }
+          if (remove) {
+            remove = false;
+            activate_buts();
+            swrem.setAttribute("src", "toolbar/remove_off.svg");
+            swrem.classList.remove("redshadow");
+          }
+          swrep.classList.add("but_dis");
+          swrem.classList.add("but_dis");
+        }
+        function activate_buts() {
+          butc.classList.remove("but_dis");
+          butn.classList.remove("but_dis");
+          buto.classList.remove("but_dis");
+          buts.classList.remove("but_dis");
+          plus.classList.remove("but_dis");
+          minus.classList.remove("but_dis");
+          butc.setAttribute("mydraggable", "true");
+          butn.setAttribute("mydraggable", "true");
+          buto.setAttribute("mydraggable", "true");
+          buts.setAttribute("mydraggable", "true");
+          plus.setAttribute("mydraggable", "true");
+          minus.setAttribute("mydraggable", "true");
+        }
+        function deactivate_buts() {
+          butc.classList.add("but_dis");
+          butn.classList.add("but_dis");
+          buto.classList.add("but_dis");
+          buts.classList.add("but_dis");
+          plus.classList.add("but_dis");
+          minus.classList.add("but_dis");
+          butc.setAttribute("mydraggable", "false");
+          butn.setAttribute("mydraggable", "false");
+          buto.setAttribute("mydraggable", "false");
+          buts.setAttribute("mydraggable", "false");
+          plus.setAttribute("mydraggable", "false");
+          minus.setAttribute("mydraggable", "false");
+        }
+        function debounce(func, t=200) {
+          let timer;
+          return (...args) => { clearTimeout(timer);
+            timer = setTimeout(() => { func(...args); }, t);
+          }
+        }
+        /** @constructor */
+        function Elem(maxch, main, side, sym, nH, chrg, children, bonds, parent, cls) {
+          this.maxch = maxch;
+          this.main = main;
+          this.side = side;
+          this.sym = sym;
+          this.nH = nH;
+          this.chrg = chrg;
+          this.children = children;
+          this.bonds = bonds;
+          this.parent = parent;
+          this.cls = cls;
+          this.x = 0;
+          this.y = 0;
+        }
+        /** @constructor */
+        function Ring(side, ori, seq, fori, fseq) {
+          this.ori = ori;
+          this.seq = seq;
+          this.fori = fori;
+          this.fseq = fseq;
+        }
+        /** @constructor */
+        function Snapshot() {
+          this.can = can.outerHTML;
+          this.counter = counter;
+          this.tree = JSON.stringify(tree);
+          this.rings = JSON.stringify(rings);
+          this.code = code.slice();
+        }
+        function pointFrom(e, page = false, touch = true) {
+          if (touch) {
+            const touch = e.touches[0];
+            return {
+              x: page ? touch.pageX : touch.clientX,
+              y: page ? touch.pageY : touch.clientY
+            };
+          } else {
+            return {
+              x: page ? e.pageX : e.clientX,
+              y: page ? e.pageY : e.clientY
+            };
+          }
+        }
+        function copyStyle(src, dst) {
+          removeTroublesomeAttributes(dst);
+          if (src instanceof HTMLCanvasElement) {
+            let cDst = dst;
+            cDst.width = src.width;
+            cDst.height = src.height;
+            cDst.getContext("2d").drawImage(src, 0, 0);
+          }
+          copyComputedStyles(src, dst);
+          dst.style.pointerEvents = "none";
+          for (let i = 0; i < src.children.length; i++) {
+            copyStyle(src.children[i], dst.children[i]);
+          }
+        }
+        function copyComputedStyles(src, dst) {
+          let cs = getComputedStyle(src);
+          if (cs) {
+            for (let key of cs) {
+              if (key.includes("transition")) { continue; }
+              if (key.includes("animation")) { continue; }
+              dst.style[key] = cs[key];
+            }
+          }
+          Object.keys(dst.dataset).forEach((key) => delete dst.dataset[key]);
+        }
+        function removeTroublesomeAttributes(dst) {
+          ["id", "class", "style", "draggable", "mydraggable"].forEach(function(att) {
+            dst.removeAttribute(att);
+          });
+        }
+        function shouldHandle(e, touch = true) {
+          if (touch) { return e && !e.defaultPrevented && e.touches && e.touches.length < 2; }
+          else { return e && !e.defaultPrevented && e.button === 0 && e.buttons <= 1; }
+        }
+        function ftouchstart(e) {
+          let istouch = e.type === "touchstart";
+          if (shouldHandle(e, istouch)) {
+            reset();
+            let src = closestDraggable(e.target);
+            if (src) {
+              dragSource = src;
+              ptDown = pointFrom(e, false, istouch);
+              lastTouch = e;
+            }
+          }
+        }
+        function ftouchmove(e) {
+          let istouch = e.type === "touchmove";
+          if (shouldHandle(e, istouch)) {
+            if (istouch && e.cancelable) { e.preventDefault(); }
+            let target = getTarget(e, istouch);
+            if (dragSource && !img && getDelta(e, istouch) > 10) { // dragThresholdPixels
+              // create image
+              if (img) { destroyImage(); }
+              let src = dragSource;
+              img = src.cloneNode(true);
+              copyStyle(src, img);
+              img.style.top = img.style.left = "-9999px";
+              let rc = src.getBoundingClientRect(), pt = pointFrom(e, false, istouch);
+              imgOffset = { x: pt.x - rc.left, y: pt.y - rc.top };
+              img.style.opacity = "0.5";
+              moveImage(e, istouch);
+              document.body.appendChild(img);
+              shadowon(target);
+            }
+            if (img && dragSource) {
+              lastTouch = e;
+              if (target !== lastTarget) {
+                if (lastTarget) { shadowoff(lastTarget); }
+                shadowon(target);
+                lastTarget = target;
+              }
+              moveImage(e, istouch);
+            }
+          }
+        }
+        function ftouchend(e) {
+          let istouch = e.type === "touchend";
+          if (!(lastTouch && e.target && lastTarget)) {
+            reset();
+            return;
+          }
+          if (shouldHandle(e, istouch)) {
+            if (!img) { dragSource = null; }
+            destroyImage();
+            if (dragSource) {
+              if (e.type.indexOf("cancel") < 0) { fdrop(lastTarget); }
+              reset();
+            }
+          }
+        }
+        function reset() {
+          destroyImage();
+          dragSource = null;
+          lastTouch = null;
+          lastTarget = null;
+          ptDown = null;
+        }
+        function getDelta(e, touch = true) {
+          if (!ptDown) { return 0; }
+          const { x, y } = ptDown;
+          const p = pointFrom(e, false, touch);
+          return Math.sqrt((p.x - x)**2 + (p.y - y)**2);
+        }
+        function getTarget(e, touch = true) {
+          let pt = pointFrom(e, false, touch), el = document.elementFromPoint(pt.x, pt.y);
+          while (el && getComputedStyle(el).pointerEvents == "none") {
+            el = el.parentElement;
+          }
+          return el;
+        }
+        function destroyImage() {
+          if (img && img.parentElement) { img.parentElement.removeChild(img); }
+          img = null;
+        }
+        function moveImage(e, touch = true) {
+          requestAnimationFrame(() => {
+            if (img) {
+              let pt = pointFrom(e, true, touch), s = img.style;
+              s.position = "absolute";
+              s.pointerEvents = "none";
+              s.zIndex = "999999";
+              s.left = round(pt.x - imgOffset.x, 1) + "px";
+              s.top = round(pt.y - imgOffset.y, 1) + "px";
+            }
+          });
+        }
+        function closestDraggable(element) {
+          for (let e = element; e !== null; e = e.parentElement) {
+            if (e.getAttribute("mydraggable") === "true") { return e; }
+          }
+          return null;
+        }
+      }
+      window["main"] = main;
+    </script>
+  </body>
+</html>
